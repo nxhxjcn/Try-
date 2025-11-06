@@ -1,0 +1,434 @@
+--[[
+	Enhanced Script:
+	- Localized all services for faster access.
+	- Scoped all variables and functions to 'local' for performance.
+	- Replaced deprecated 'wait()' with 'task.wait()'.
+	- Replaced custom 'ffc' with standard ':FindFirstChild()'.
+	- Optimized math operations.
+]]
+
+-- Services
+local HttpService = game:GetService("HttpService")
+local ScriptContext = game:GetService("ScriptContext")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+
+-- Local Settings & State
+local settings = {refill_at=0, refill_end=60, deliver_at=24, stay_in_kitchen=true}
+local doCashier,doBoxer,doCook,doSupplier,doDelivery = true,true,true,true,true
+
+if readfile then
+	pcall(function()
+		local new = HttpService:JSONDecode(readfile("PizzaFarm.txt"))
+		--corruption?
+		local doOverwrite=false
+		for k,v in pairs(new) do
+			if settings[k]==nil then
+				doOverwrite=true
+				new[k]=nil
+			end
+		end
+		for k,v in pairs(settings) do
+			if new[k]==nil then
+				doOverwrite=true
+				new[k]=v
+			end
+		end
+		--use input
+		if doOverwrite then
+			warn("Settings overwritten")
+			writefile("PizzaFarm.txt",HttpService:JSONEncode(new))
+		end
+		settings = new
+	end)
+end
+
+if getconnections then
+	for _,c in next,getconnections(ScriptContext.Error) do
+		c:Disable()
+	end
+end
+
+-- Local Player & Game Variables
+local player = Players.LocalPlayer
+local RNG = Random.new()
+local network
+local character,root,humanoid
+
+do
+	local reg = (getreg or debug.getregistry)()
+	for i=1,#reg do
+		local f = reg[i]
+		if type(f)=="function" then
+			for k,v in next,getupvalues(f) do
+				if typeof(v)=="Instance" then
+					if v.Name=="CashOut" then
+						setupvalue(f,k,{MouseButton1Click={wait=function()end,Wait=function()end}})
+					elseif v.Name=="StickerName" then
+						setupvalue(f,k,nil)
+					end
+				end
+			end
+			if tostring(getfenv(f)) == "Music" then
+				local consts = getconstants(f)
+				local loc=false
+				for ci,c in next,consts do
+					if c == "location changed" then
+						loc=true
+					elseif loc and c == "SendData" then
+						setconstant(f,ci,"ExplodeString")
+						break
+					end
+				end
+			end
+		elseif type(f)=="table" and rawget(f,"FireServer") and rawget(f,"BindEvents") then
+			network = f
+		end
+	end
+end
+assert(network,"failed to find network")
+
+--//gui
+local function Create(class,parent,props)
+	local new = Instance.new(class)
+	for k,v in next,props do
+		new[k]=v
+	end
+	new.Parent = parent
+	return new
+end
+
+local gui=Create("ScreenGui",CoreGui,{Name="Farm", ZIndexBehavior="Sibling"})
+local main=Create("Frame",gui,{Name="main", Draggable=true, Active=true, Size=UDim2.new(0,350,0,100), Position=UDim2.new(.335,0,0.02,0), BackgroundColor3=Color3.new(0.098,0.098,0.098)})
+local topbar=Create("Frame",main,{Name="topbar", Size=UDim2.new(1,0,0.15,0), BackgroundColor3=Color3.new(0.255,0.255,0.255)})
+local closeBtn=Create("TextButton",topbar,{Name="closeBtn", TextWrapped=true, Size=UDim2.new(0.03,0,1,0), TextColor3=Color3.new(1,1,1), Text="X", BackgroundTransparency=1, 
+	Font="GothamSemibold", Position=UDim2.new(0.96,0,0,0), TextSize=14, TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local titleLbl=Create("TextLabel",topbar,{Name="titleLbl", TextWrapped=true, Size=UDim2.new(0.5,0,1,0), Text="Pizza Factory", TextSize=14, Font="GothamSemibold", 
+	BackgroundTransparency=1, Position=UDim2.new(0.25,0,0,0), TextColor3=Color3.new(1,1,1), BackgroundColor3=Color3.new(1,1,1)})
+local saveBtn=Create("ImageButton",topbar,{Name="saveBtn", Image="rbxassetid://55687833", Size=UDim2.new(0.05,0,1,0), Position=UDim2.new(0.01,0,0,0), BackgroundTransparency=1, BackgroundColor3=Color3.new(), Visible=writefile~=nil})
+local settings_1=Create("Frame",main,{Name="settings", BackgroundTransparency=1, Size=UDim2.new(0.97,0,0.75,0), Position=UDim2.new(0.025,0,0.2,0), BackgroundColor3=Color3.new(1,1,1)})
+local Layout=Create("UIGridLayout",settings_1,{VerticalAlignment="Center", SortOrder="LayoutOrder", HorizontalAlignment="Center", CellPadding=UDim2.new(0.01,0,0.1,0), CellSize=UDim2.new(0.325,0,0.26,0)})
+local cashier=Create("Frame",settings_1,{Name="cashier", LayoutOrder=4, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local Label=Create("TextLabel",cashier,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Cashier", TextSize=14, TextXAlignment="Left", Font="SourceSans", 
+	BackgroundTransparency=1, Position=UDim2.new(0.4,0,0,0), TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local cashierBtn=Create("ImageButton",cashier,{Name="cashierBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.38,0,1,0), BackgroundColor3=Color3.new(0.392,0.392,0.392)})
+local cashierSlider=Create("Frame",cashierBtn,{Name="slider", Size=UDim2.new(0.5,-4,1,-4), Position=UDim2.new(doCashier and 0.5 or 0,2,0,2), BorderSizePixel=0, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local kitchen=Create("Frame",settings_1,{Name="kitchen", LayoutOrder=9, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local Label_2=Create("TextLabel",kitchen,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Deliver At:", TextSize=14, TextXAlignment="Right", Font="SourceSans", 
+	BackgroundTransparency=1, TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local deliverAtBox=Create("TextBox",kitchen,{Name="deliverAtBox", TextWrapped=true, Size=UDim2.new(0.25,0,1,0), Text=tostring(settings.deliver_at), TextSize=50, TextColor3=Color3.new(), 
+	Font="Code", Position=UDim2.new(0.62,0,0,0), TextScaled=true, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local refillEnd=Create("Frame",settings_1,{Name="refillEnd", LayoutOrder=8, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local refillEndBox=Create("TextBox",refillEnd,{Name="refillEndBox", TextWrapped=true, Size=UDim2.new(0.25,0,1,0), Text=tostring(settings.refill_end), TextSize=50, TextColor3=Color3.new(), 
+	Font="Code", Position=UDim2.new(0.62,0,0,0), TextScaled=true, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local Label_3=Create("TextLabel",refillEnd,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Refill End:", TextSize=14, TextXAlignment="Right", Font="SourceSans", 
+	BackgroundTransparency=1, TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local refillAt=Create("Frame",settings_1,{Name="refillAt", LayoutOrder=7, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local Label_4=Create("TextLabel",refillAt,{TextWrapped=true, Size=UDim2.new(0.5,0,1,0), Text="Refill At:", TextSize=14, TextXAlignment="Right", Font="SourceSans", 
+	BackgroundTransparency=1, TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local refillAtBox=Create("TextBox",refillAt,{Name="refillAtBox", TextWrapped=true, Size=UDim2.new(0.25,0,1,0), Text=tostring(settings.refill_at), TextSize=50, TextColor3=Color3.new(), 
+	Font="Code", Position=UDim2.new(0.52,0,0,0), TextScaled=true, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local supplier=Create("Frame",settings_1,{Name="supplier", LayoutOrder=6, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local Label_5=Create("TextLabel",supplier,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Supplier", TextSize=14, TextXAlignment="Left", Font="SourceSans", 
+	BackgroundTransparency=1, Position=UDim2.new(0.4,0,0,0), TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local supplierBtn=Create("ImageButton",supplier,{Name="supplierBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.38,0,1,0), BackgroundColor3=Color3.new(0.392,0.392,0.392)})
+local supplierSlider=Create("Frame",supplierBtn,{Name="slider", Size=UDim2.new(0.5,-4,1,-4), Position=UDim2.new(doSupplier and 0.5 or 0,2,0,2), BorderSizePixel=0, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local delivery=Create("Frame",settings_1,{Name="delivery", LayoutOrder=5, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local Label_6=Create("TextLabel",delivery,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Delivery", TextSize=14, TextXAlignment="Left", Font="SourceSans", 
+	BackgroundTransparency=1, Position=UDim2.new(0.4,0,0,0), TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local deliveryBtn=Create("ImageButton",delivery,{Name="deliveryBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.38,0,1,0), BackgroundColor3=Color3.new(0.392,0.392,0.392)})
+local deliverySlider=Create("Frame",deliveryBtn,{Name="slider", Size=UDim2.new(0.5,-4,1,-4), Position=UDim2.new(doDelivery and 0.5 or 0,2,0,2), BorderSizePixel=0, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local boxer=Create("Frame",settings_1,{Name="boxer", LayoutOrder=2, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local boxerLbl=Create("TextLabel",boxer,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Boxer", TextSize=14, TextXAlignment="Left", Font="SourceSans", 
+	BackgroundTransparency=1, Position=UDim2.new(0.4,0,0,0), TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local boxerBtn=Create("ImageButton",boxer,{Name="boxerBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.38,0,1,0), BackgroundColor3=Color3.new(0.392,0.392,0.392)})
+local boxerSlider=Create("Frame",boxerBtn,{Name="slider", Size=UDim2.new(0.5,-4,1,-4), Position=UDim2.new(doBoxer and 0.5 or 0,2,0,2), BorderSizePixel=0, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local cook=Create("Frame",settings_1,{Name="cook", LayoutOrder=3, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local cookLbl=Create("TextLabel",cook,{TextWrapped=true, Size=UDim2.new(0.6,0,1,0), Text="Cook", TextSize=14, TextXAlignment="Left", Font="SourceSans", 
+	BackgroundTransparency=1, Position=UDim2.new(0.4,0,0,0), TextColor3=Color3.new(1,1,1), TextScaled=true, BackgroundColor3=Color3.new(1,1,1)})
+local cookBtn=Create("ImageButton",cook,{Name="cookBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.38,0,1,0), BackgroundColor3=Color3.new(0.392,0.392,0.392)})
+local cookSlider=Create("Frame",cookBtn,{Name="slider", Size=UDim2.new(0.5,-4,1,-4), Position=UDim2.new(doCook and 0.5 or 0,2,0,2), BorderSizePixel=0, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local toggleAll=Create("Frame",settings_1,{Name="toggleAll", LayoutOrder=1, BackgroundTransparency=1, Size=UDim2.new(0,100,0,100), BackgroundColor3=Color3.new(1,1,1)})
+local switch=Create("Frame",toggleAll,{Name="switch", BackgroundTransparency=1, Size=UDim2.new(0.75,0,1,0), BackgroundColor3=Color3.new(1,1,1)})
+local allOffBtn=Create("ImageButton",switch,{Name="allOffBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.5,0,1,0), BackgroundColor3=Color3.new(0.235,0.235,0.235)})
+local allOnBtn=Create("ImageButton",switch,{Name="allOnBtn", ImageTransparency=1, BorderSizePixel=0, Size=UDim2.new(0.5,0,1,0), Position=UDim2.new(0.5,0,0,0), BackgroundColor3=Color3.new(0.333,0.333,0.333)})
+local toggleAllSlider=Create("Frame",switch,{Name="slider", Size=UDim2.new(0.1,0,1,4), Position=UDim2.new(0.45,0,0,-2), BorderSizePixel=0, BackgroundColor3=Color3.new(0.784,0.784,0.784)})
+local messageLbl=Create("TextLabel",topbar,{Name="messageLbl", Size=UDim2.new(0.5,0,1,0), Text="Saved.", TextSize=14, Font="GothamSemibold", BackgroundTransparency=1, 
+	Position=UDim2.new(0.07,0,0,0), TextColor3=Color3.new(1,1,1), Visible=false, TextXAlignment="Left"})
+local camframe=Create("Frame",gui,{Name="camframe", BackgroundTransparency=1, Size=UDim2.new(0,120,0,40), Position=UDim2.new(0.5,-320,0,-38), BackgroundColor3=Color3.new(0.118,0.118,0.118)})
+local rightCamBtn=Create("ImageButton",camframe,{Name="rightCamBtn", Image="rbxassetid://144168163", Size=UDim2.new(0.333,0,1,0), Rotation=180, Position=UDim2.new(0.666,0,0,0), BackgroundTransparency=1, 
+	BackgroundColor3=Color3.new(1,1,1)})
+local leftCamBtn=Create("ImageButton",camframe,{Name="leftCamBtn", Image="rbxassetid://144168163", Size=UDim2.new(0.333,0,1,0), BackgroundTransparency=1, BackgroundColor3=Color3.new(1,1,1)})
+local centerCamBtn=Create("ImageButton",camframe,{Name="centerCamBtn", Image="rbxassetid://58282192", Size=UDim2.new(0.333,0,1,0), Position=UDim2.new(0.333,0,0,0), BackgroundTransparency=1, BackgroundColor3=Color3.new(1,1,1)})
+local creditLbl=Create("TextLabel",main,{Position=UDim2.new(0,0,1,5),Size=UDim2.new(0,100,0,15),BackgroundTransparency=1,TextColor3=Color3.new(1,1,1),Text="by sirelKilla",TextScaled=true,TextStrokeTransparency=.8})
+
+local function toggleCashier(bool)
+	if bool~=nil then
+		doCashier=bool
+	else
+		doCashier = not doCashier
+	end
+	cashierSlider:TweenPosition(UDim2.new(doCashier and 0.5 or 0,2,0,2),nil,"Sine",0.1,true)
+end
+local function toggleCook(bool)
+	if bool~=nil then
+		doCook=bool
+	else
+		doCook = not doCook
+	end
+	cookSlider:TweenPosition(UDim2.new(doCook and 0.5 or 0,2,0,2),nil,"Sine",0.1,true)
+end
+local function toggleBoxer(bool)
+	if bool~=nil then
+		doBoxer=bool
+	else
+		doBoxer = not doBoxer
+	end
+	boxerSlider:TweenPosition(UDim2.new(doBoxer and 0.5 or 0,2,0,2),nil,"Sine",0.1,true)
+end
+local function toggleDelivery(bool)
+	if bool~=nil then
+		doDelivery=bool
+	else
+		doDelivery = not doDelivery
+	end
+	deliverySlider:TweenPosition(UDim2.new(doDelivery and 0.5 or 0,2,0,2),nil,"Sine",0.1,true)
+end
+local function toggleSupplier(bool)
+	if bool~=nil then
+		doSupplier=bool
+	else
+		doSupplier = not doSupplier
+	end
+	supplierSlider:TweenPosition(UDim2.new(doSupplier and 0.5 or 0,2,0,2),nil,"Sine",0.1,true)
+end
+cashierBtn.MouseButton1Click:Connect(toggleCashier)
+cookBtn.MouseButton1Click:Connect(toggleCook)
+boxerBtn.MouseButton1Click:Connect(toggleBoxer)
+deliveryBtn.MouseButton1Click:Connect(toggleDelivery)
+supplierBtn.MouseButton1Click:Connect(toggleSupplier)
+allOffBtn.InputBegan:Connect(function()
+	if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+		toggleCashier(false)
+		toggleCook(false)
+		toggleBoxer(false)
+		toggleDelivery(false)
+		toggleSupplier(false)
+		toggleAllSlider:TweenPosition(UDim2.new(0,0,0,-2),nil,"Sine",0.1,true)
+		task.wait(1)
+		if toggleAllSlider.Position.X.Scale<.01 then
+			toggleAllSlider:TweenPosition(UDim2.new(0.45,0,0,-2),nil,"Sine",0.1,true)
+		end
+	end
+end)
+allOnBtn.InputBegan:Connect(function()
+	if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+		toggleCashier(true)
+		toggleCook(true)
+		toggleBoxer(true)
+		toggleDelivery(true)
+		toggleSupplier(true)
+		toggleAllSlider:TweenPosition(UDim2.new(0.9,0,0,-2),nil,"Sine",0.1,true)
+		task.wait(1)
+		if toggleAllSlider.Position.X.Scale>.88 then
+			toggleAllSlider:TweenPosition(UDim2.new(0.45,0,0,-2),nil,"Sine",0.1,true)
+		end
+	end
+end)
+local oldRefillAt=refillAtBox.Text
+refillAtBox:GetPropertyChangedSignal("Text"):Connect(function()
+	if #refillAtBox.Text>2 or refillAtBox.Text:match("%D") then
+		refillAtBox.Text = oldRefillAt
+	end
+	oldRefillAt = refillAtBox.Text
+end)
+refillAtBox.FocusLost:Connect(function()
+	if tonumber(refillAtBox.Text) then
+		settings.refill_at=tonumber(refillAtBox.Text)
+	end
+	refillAtBox.Text=tostring(settings.refill_at)
+end)
+local oldRefillEnd=refillEndBox.Text
+refillEndBox:GetPropertyChangedSignal("Text"):Connect(function()
+	if #refillEndBox.Text>2 or refillEndBox.Text:match("%D") then
+		refillEndBox.Text = oldRefillEnd
+	end
+	oldRefillEnd = refillEndBox.Text
+end)
+refillEndBox.FocusLost:Connect(function()
+	if tonumber(refillEndBox.Text) then
+		settings.refill_end=tonumber(refillEndBox.Text)
+	end
+	refillEndBox.Text=tostring(settings.refill_end)
+end)
+local oldDeliverAt=deliverAtBox.Text
+deliverAtBox:GetPropertyChangedSignal("Text"):Connect(function()
+	if #deliverAtBox.Text>2 or deliverAtBox.Text:match("%D") then
+		deliverAtBox.Text = oldDeliverAt
+	end
+	oldDeliverAt = deliverAtBox.Text
+end)
+deliverAtBox.FocusLost:Connect(function()
+	if tonumber(deliverAtBox.Text) then
+		settings.deliver_at=tonumber(deliverAtBox.Text)
+	end
+	deliverAtBox.Text=tostring(settings.deliver_at)
+end)
+closeBtn.MouseButton1Click:Connect(function()
+	gui:Destroy()
+	doCashier,doBoxer,doCook,doSupplier,doDelivery = false,false,false,false,false
+end)
+closeBtn.MouseEnter:Connect(function() closeBtn.TextColor3=Color3.new(.9,0,0) end)
+closeBtn.MouseLeave:Connect(function() closeBtn.TextColor3=Color3.new(1,1,1) end)
+saveBtn.MouseButton1Click:Connect(function()
+	if writefile and messageLbl.Visible==false then
+		writefile("PizzaFarm.txt",HttpService:JSONEncode(settings))
+		messageLbl.Visible=true
+		task.wait(2)
+		messageLbl.Visible=false
+	end
+end)
+local cameraArray = {CFrame.new(23,14,65,0.629,0.386,-0.674,-0,0.867,0.497,0.777,-0.313,0.545),CFrame.new(39,15,83,-0.571,0.392,-0.720,-0,0.878,0.478,0.820,0.273,-0.502),CFrame.new(40,20,-38,-0.801,-0.229,0.552,-0,0.923,0.384,-0.598,0.307,-0.739),CFrame.new(51,15,-25,-0.707,0.338,-0.620,0,0.878,0.478,0.707,0.338,-0.620),CFrame.new(47,12,21,0.026,0.323,-0.945,-0,0.946,0.323,0.999,-0.008,0.024)}
+local cameraIndex = 0
+centerCamBtn.MouseButton1Click:Connect(function()
+	cameraIndex = 0
+	Workspace.CurrentCamera.CameraType = "Custom"
+end)
+leftCamBtn.MouseButton1Click:Connect(function()
+	cameraIndex = cameraIndex - 1
+	if cameraIndex < 0 then
+		cameraIndex = #cameraArray
+	end
+	if cameraIndex == 0 then
+		Workspace.CurrentCamera.CameraType="Custom"
+	else
+		local cf = cameraArray[cameraIndex]
+		Workspace.CurrentCamera.CameraType="Scriptable"
+		Workspace.CurrentCamera:Interpolate(cf,cf+cf.lookVector*10,0.5)
+	end
+end)
+rightCamBtn.MouseButton1Click:Connect(function()
+	cameraIndex = cameraIndex + 1
+	if cameraIndex > #cameraArray then
+		cameraIndex = 0
+		Workspace.CurrentCamera.CameraType="Custom"
+	else
+		local cf = cameraArray[cameraIndex]
+		Workspace.CurrentCamera.CameraType="Scriptable"
+		Workspace.CurrentCamera:Interpolate(cf,cf+cf.lookVector*10,0.5)
+	end
+end)
+
+--//subroutines
+local supplyCounts = {TomatoSauce=99,Cheese=99,Sausage=99,Pepperoni=99,Dough=99,Box=99,Dew=99}
+for name in pairs(supplyCounts) do
+	local lbl = Workspace.SupplyCounters.Model[name=="Dew" and "CounterMountainDew" or "Counter"..name].a.SG.Counter
+	supplyCounts[name]=tonumber(lbl.Text)
+	lbl.Changed:Connect(function()
+		supplyCounts[name]=tonumber(lbl.Text)
+	end)
+end
+
+local function FindFirstCustomer()
+	local children = Workspace.Customers:GetChildren()
+	for i=1,#children do
+		local c = children[i]
+		-- Use :FindFirstChild() for efficiency and safety
+		if c:FindFirstChild("Head") and c:FindFirstChild("Humanoid") and c.Head.CFrame.Z<102 then
+			local dialogInstance = c.Head:FindFirstChild("Dialog")
+			if dialogInstance and dialogInstance:FindFirstChild("Correct") then
+				-- Use math.abs() for efficient absolute value
+				if (c.Humanoid.SeatPart and c.Humanoid.SeatPart.Anchored) or (c.Humanoid.SeatPart==nil and math.abs(c.Head.Velocity.Z) < 0.0001) then
+					local dialog = dialogInstance.Correct.ResponseDialog or ''
+					local order = "MountainDew"
+					if dialog:sub(-8)=="instead." then
+						dialog = dialog:sub(-30)
+					end
+					if dialog:find("pepperoni",1,true) then
+						order = "PepperoniPizza"
+					elseif dialog:find("sausage",1,true) then
+						order = "SausagePizza"
+					elseif dialog:find("cheese",1,true) then
+						order = "CheesePizza"
+					end
+					return c,order
+				end
+			end
+		end
+	end
+end
+
+local boxPtick=0
+local boxDtick=0
+local function FindBoxes()
+	local c,o,f
+	local children = Workspace.AllBox:GetChildren()
+	for i=1,#children do
+		local b = children[i]
+		-- Use :FindFirstChild()
+		if b:FindFirstChild("HasPizzaInside") or b:FindFirstChild("Pizza") then
+			if c==nil and b.Name=="BoxClosed" and b.Anchored==false and not b.HasPizzaInside.Value then
+				c=b
+			elseif o==nil and b.Name=="BoxOpen" and b.Anchored==false and not b.Pizza.Value then
+				o=b
+			elseif f==nil and (b.Name=="BoxOpen" and b.Pizza.Value) or (b.Name=="BoxClosed" and b.HasPizzaInside.Value) then
+				f=b
+			end
+			if c and o and f then
+				return c,o,f
+			end
+		end
+	end
+	return c,o,f
+end
+
+local function FindBoxingFoods()
+	local p,d
+	local children = Workspace.BoxingRoom:GetChildren()
+	for i=1,#children do
+		local f = children[i]
+		if not f.Anchored then
+			if p==nil and f.Name=="Pizza" then
+				p=f
+			elseif d==nil and f.Name=="Dew" then
+				d=f
+			end
+			if p and d then
+				return p,d
+			end
+		end
+	end
+	return p,d
+end
+
+local orderDict={["3540529228"]="Cheese",["3540530535"]="Sausage",["3540529917"]="Pepperoni",["2512571151"]="Dew",["2512441325"]="Dew"}
+local cookingDict = {Cheese=0,Sausage=0,Pepperoni=0,Dew=0}
+local cookPtick=0
+local cookDtick=0
+local cookWarned=false
+local boxerWarned=false
+
+local function getOrders()
+	local orders={}
+	local tempCookingDict = {}
+	for i,v in pairs(cookingDict) do tempCookingDict[i]=v end
+	local children = Workspace.Orders:GetChildren()
+	for i=1,#children do
+		-- NOTE: The original script was cut off here.
+		-- Assuming 'mat' was meant to be 'match' or similar.
+		-- This line is incomplete from the source.
+		-- local o = orderDict[children[i].SG.ImageLabel.Image:mat
+	end
+	-- ... The rest of this function was missing from the source ...
+end
+
+--[[
+	NOTE: The original script provided setup and helper functions,
+	but did not include the main loop that would use them
+	(e.g., a 'while task.wait() do ... end' loop).
+	
+	The functions FindFirstCustomer, FindBoxes, FindBoxingFoods, and getOrders
+	are defined but are not called.
+]]
