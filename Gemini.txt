@@ -16,6 +16,15 @@ local CoreGui = game:GetService("CoreGui")
 local Workspace = game:GetService("Workspace")
 
 -- Local Settings & State
+getupvalues = getupvalues or debug.getupvalues
+setupvalue = setupvalue or debug.setupvalue
+if not (getrawmetatable and getupvalues and setupvalue and (getreg or debug.getregistry)) then
+	local h = Instance.new("Hint",workspace)
+	h.Text = "Incompatible exploit."
+	wait(3)
+	h:Destroy()
+	return
+end
 local settings = {refill_at=0, refill_end=60, deliver_at=24, stay_in_kitchen=true}
 local doCashier,doBoxer,doCook,doSupplier,doDelivery = true,true,true,true,true
 
