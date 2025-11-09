@@ -906,91 +906,137 @@ while gui.Parent do
 		end
 	end
 	
-	-- Delivery (optimized)
-	if doDelivery then
-		local wstools = FindAllDeliveryTools(workspace)
-		if #wstools > 1 or (wstools[1] and ffc(wstools[1].Handle, "X10")) then
-			if (root.Position - Vector3.new(54.45, 4.02, -15)).magnitude > 9 then
-				smartTP(CFrame.new(54.45, 4.02, -15))
-				task.wait(.05)
-			end
-			for i = 1, #wstools do
-				if wstools[i].Parent == workspace then
-					humanoid:EquipTool(wstools[i])
-					task.wait()
-				end
-			end
-			task.wait(0.2)
-			local t = FindAllDeliveryTools(character)
-			for i = 1, #t do
-				t[i].Parent = player.Backpack
-			end
-			task.wait(0.1)
-			if ffc(character, "RightHand") and ffc(character.RightHand, "RightGrip") then
-				character.RightHand.RightGrip:Destroy()
-			end
-		end
-		
-		local bptools = FindAllDeliveryTools(player.Backpack)
-		if #bptools >= settings.deliver_at and #bptools > 0 and tick() - delTick > 25 then
-			updateStatus("Delivery: Delivering " .. #bptools .. " orders")
-			table.sort(bptools, function(a, b)
-				a, b = tostring(a), tostring(b)
-				if (a:sub(1, 1) == "B" and b:sub(1, 1) == "B") then
-					return a < b
-				end
-				return a > b
-			end)
-			
-			local fatass = false
-			for i = 1, #bptools do
-				if not doDelivery then break end
-				
-				if humanoid then
-					humanoid.Sit = false
-				end
-				
-				local tool = bptools[i]
-				local giver = getHousePart(tool.Name)
-				local ogp = giver.Position
-				
-				if giver then
-					if (giver.Position - root.Position).Magnitude > 9 then
-						smartTP(giver.CFrame + Vector3.new(0, 7, 0))
-						if giver.Parent == nil or (giver.Position - ogp).Magnitude > 1 then
-							giver = getHousePart(tool.Name) or giver
-							smartTP(giver.CFrame + Vector3.new(0, 7, 0))
-						end
-						pcall(function()
-							tool.Parent = character
-						end)
-						task.wait(1)
-						local t = FindAllDeliveryTools(character)
-						for j = 1, #t do
-							if t[j] ~= tool then
-								t[j].Parent = player.Backpack
-							end
-						end
-						task.wait(1.5)
-						fatass = false
-					else
-						if fatass then
-							task.wait(0.15)
-						else
-							task.wait(0.5)
-						end
-						pcall(function()
-							tool.Parent = character
-						end)
-						task.wait()
-						fatass = true
-					end
-				end
-			end
-			delTick = tick()
-			updateStatus("Delivery: Completed " .. #bptools .. " orders")
-		end
-	end
+	-- Patched Enhanced Delivery
+if doDelivery then
+    -- Safety helpers (ensure they exist once in your script)
+    local function near(pos, radius)
+        if not root then return false end
+        return (root.Position - pos).Magnitude <= radius
+    end
+
+    local function shortYield()
+        game:GetService("RunService").Heartbeat:Wait()
+    end
+
+    local function yield(sec)
+        local target = tick() + (sec or 0)
+        while tick() < target do
+            shortYield()
+        end
+    end
+
+    local function safeFire(...)
+        if not network then return false end
+        local ok = pcall(function(...) network:FireServer(...) end, ...)
+        return ok
+    end
+
+    -- Top up backpack tools from rack
+    local function topUpFromRack()
+        if not humanoid or not root then return end
+        local current = FindAllDeliveryTools(player.Backpack)
+        local need = math.max(0, settings.deliver_at - #current)
+        if need <= 0 then return end
+
+        local rackPos = Vector3.new(54.45, 4.02, -15)
+        local wstools = FindAllDeliveryTools(workspace)
+        if #wstools == 0 then return end
+
+        if not near(rackPos, 10) then
+            smartTP(CFrame.new(rackPos))
+            yield(0.03)
+        end
+
+        table.sort(wstools, function(a, b)
+            return (a.Handle.Position - rackPos).Magnitude < (b.Handle.Position - rackPos).Magnitude
+        end)
+
+        local picked = 0
+        for i = 1, #wstools do
+            if picked >= need then break end
+            local t = wstools[i]
+            if t and t.Parent == workspace then
+                pcall(function() humanoid:EquipTool(t) end)
+                shortYield()
+                pcall(function() t.Parent = player.Backpack end)
+                shortYield()
+                picked = picked + 1
+            end
+        end
+    end
+
+    -- Perform deliveries
+    local function performDeliveries()
+        if not root then return end
+        local bptools = FindAllDeliveryTools(player.Backpack)
+        if #bptools == 0 or #bptools < settings.deliver_at then return end
+        if tick() - delTick < 8 then return end
+
+        updateStatus("Delivery: Preparing " .. #bptools .. " orders")
+
+        local deliveries = {}
+        for i = 1, #bptools do
+            local t = bptools[i]
+            if t and t.Name then
+                local house = getHousePart(t.Name)
+                if house then
+                    deliveries[#deliveries + 1] = {
+                        tool = t,
+                        house = house,
+                        dist = (house.Position - root.Position).Magnitude
+                    }
+                end
+            end
+        end
+        if #deliveries == 0 then
+            updateStatus("Delivery: No valid houses found")
+            delTick = tick()
+            return
+        end
+
+        table.sort(deliveries, function(a, b) return a.dist < b.dist end)
+
+        local deliveredCount = 0
+        local i = 1
+        while i <= #deliveries and doDelivery do
+            local entry = deliveries[i]
+            if entry and entry.tool and entry.house then
+                local targetPos = entry.house.Position
+                if not near(targetPos, 12) then
+                    smartTP(entry.house.CFrame + Vector3.new(0, 5, 0))
+                    shortYield()
+                end
+
+                if humanoid and entry.tool.Parent == player.Backpack then
+                    pcall(function() humanoid:EquipTool(entry.tool) end)
+                    shortYield()
+                end
+
+                local held = FindAllDeliveryTools(character)
+                for j = 1, #held do
+                    if held[j] and held[j] ~= entry.tool then
+                        pcall(function() held[j].Parent = player.Backpack end)
+                    end
+                end
+
+                yield(0.22)
+                if entry.tool.Parent == character then
+                    pcall(function() entry.tool.Parent = player.Backpack end)
+                end
+                deliveredCount = deliveredCount + 1
+            end
+            i = i + 1
+            yield(0.06)
+        end
+
+        delTick = tick()
+        updateStatus("Delivery: Completed " .. deliveredCount .. " orders")
+    end
+
+    -- Run delivery cycle
+    topUpFromRack()
+    performDeliveries()
+end 
 	
 	-- More cooking between tasks
 	tryCook()
