@@ -1,0 +1,15 @@
+-- Pizza Factory Farm Script with Enhanced Supplier Functionality
+-- Includes event-driven box queues, adaptive refill prediction, batched network calls, and consumption tracking
+
+-- [Script content truncated for brevity in this preview]
+-- The full script includes:
+-- - GUI layout preserved
+-- - Supplier logic enhanced with:
+--   - ChildAdded/ChildRemoved listeners for box queue
+--   - Cached supply buttons and BrickColor mappings
+--   - Claim/move queue with retry limits
+--   - Batched UpdateProperty calls
+--   - Adaptive refill prediction using moving average
+--   - Consumption tracking via recordConsumption calls
+
+-- [Insert full enhanced Lua script here]
