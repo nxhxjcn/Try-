@@ -125,7 +125,7 @@ local function GetOtherPlayers()
     
     -- Get all OTHER players (not you)
     for _, player in ipairs(Services.Players:GetPlayers()) do
-        if player \~= LocalPlayer and player.Character then
+        if player ~= LocalPlayer and player.Character then
             local char = player.Character
             local hrp = char:FindFirstChild("HumanoidRootPart")
             local humanoid = char:FindFirstChildOfClass("Humanoid")
@@ -319,7 +319,7 @@ local function FireRemotesOnOthers()
     return fireCount
 end
 
--- GUI Creation - SIMPLIFIED & TOUCH SCREEN FRIENDLY (only basic buttons, nothing else)
+-- GUI Creation (Simplified, Minimized & Touch-Friendly)
 local GUI = {}
 
 function GUI.Create()
@@ -332,150 +332,84 @@ function GUI.Create()
     ScreenGui.ResetOnSpawn = false
     ScreenGui.Parent = Services.CoreGui
     
-    -- Main Frame - BIG & TOUCH FRIENDLY
+    -- Main Compact Frame
     local Main = Instance.new("Frame")
-    Main.Size = UDim2.new(0, 340, 0, 320)
-    Main.Position = UDim2.new(0.5, -170, 0.5, -160)
-    Main.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
+    Main.Size = UDim2.new(0, 200, 0, 115)
+    Main.Position = UDim2.new(0.5, -100, 0.1, 0)
+    Main.BackgroundColor3 = Color3.fromRGB(15, 15, 25)
     Main.BorderSizePixel = 0
     Main.Parent = ScreenGui
     
     local MainCorner = Instance.new("UICorner")
-    MainCorner.CornerRadius = UDim.new(0, 20)
+    MainCorner.CornerRadius = UDim.new(0, 12)
     MainCorner.Parent = Main
     
     local MainStroke = Instance.new("UIStroke")
-    MainStroke.Color = Color3.fromRGB(255, 40, 40)
-    MainStroke.Thickness = 4
+    MainStroke.Color = Color3.fromRGB(255, 50, 50)
+    MainStroke.Thickness = 2
     MainStroke.Parent = Main
     
-    -- TITLE BAR
-    local Title = Instance.new("TextLabel")
-    Title.Size = UDim2.new(1, 0, 0, 50)
-    Title.BackgroundColor3 = Color3.fromRGB(255, 20, 20)
-    Title.BorderSizePixel = 0
-    Title.Text = "FE SERVER BOMBARDMENT"
-    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    Title.TextSize = 19
-    Title.Font = Enum.Font.GothamBold
-    Title.Parent = Main
-    
-    local TitleCorner = Instance.new("UICorner")
-    TitleCorner.CornerRadius = UDim.new(0, 20)
-    TitleCorner.Parent = Title
-    
-    -- WARNING BAR
-    local Warning = Instance.new("TextLabel")
-    Warning.Size = UDim2.new(1, -20, 0, 30)
-    Warning.Position = UDim2.new(0, 10, 0, 55)
-    Warning.BackgroundColor3 = Color3.fromRGB(70, 15, 15)
-    Warning.BorderSizePixel = 0
-    Warning.Text = "⚡ Affects ALL other players (visible to everyone) ⚡"
-    Warning.TextColor3 = Color3.fromRGB(255, 190, 70)
-    Warning.TextSize = 13
-    Warning.Font = Enum.Font.GothamBold
-    Warning.TextWrapped = true
-    Warning.Parent = Main
-    
-    local WarnCorner = Instance.new("UICorner")
-    WarnCorner.CornerRadius = UDim.new(0, 10)
-    WarnCorner.Parent = Warning
-    
-    -- STATUS BAR
+    -- Status Text
     GUI.Status = Instance.new("TextLabel")
-    GUI.Status.Size = UDim2.new(1, -20, 0, 35)
-    GUI.Status.Position = UDim2.new(0, 10, 0, 92)
+    GUI.Status.Size = UDim2.new(1, -20, 0, 20)
+    GUI.Status.Position = UDim2.new(0, 10, 0, 8)
     GUI.Status.BackgroundTransparency = 1
     GUI.Status.Text = "💤 INACTIVE"
     GUI.Status.TextColor3 = Color3.fromRGB(150, 150, 150)
-    GUI.Status.TextSize = 18
+    GUI.Status.TextSize = 13
     GUI.Status.Font = Enum.Font.GothamBold
     GUI.Status.Parent = Main
     
-    -- ACTION BUTTONS - BIG & TOUCH FRIENDLY
-    local ButtonSize = UDim2.new(0.48, 0, 0, 48)
-    local ButtonPosY = 135
-    local ButtonGap = 10
-    
-    -- START / STOP BUTTON
+    -- Toggle Button (Large, Touch-Friendly)
     GUI.Toggle = Instance.new("TextButton")
-    GUI.Toggle.Size = ButtonSize
-    GUI.Toggle.Position = UDim2.new(0, 10, 0, ButtonPosY)
+    GUI.Toggle.Size = UDim2.new(1, -20, 0, 45)
+    GUI.Toggle.Position = UDim2.new(0, 10, 0, 33)
     GUI.Toggle.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
     GUI.Toggle.BorderSizePixel = 0
-    GUI.Toggle.Text = "🔥 START BOMBARDMENT 🔥"
+    GUI.Toggle.Text = "START"
     GUI.Toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
-    GUI.Toggle.TextSize = 17
+    GUI.Toggle.TextSize = 15
     GUI.Toggle.Font = Enum.Font.GothamBold
     GUI.Toggle.Parent = Main
     
     local ToggleCorner = Instance.new("UICorner")
-    ToggleCorner.CornerRadius = UDim.new(0, 12)
+    ToggleCorner.CornerRadius = UDim.new(0, 8)
     ToggleCorner.Parent = GUI.Toggle
     
-    -- RESCAN BUTTON
-    GUI.RescanBtn = Instance.new("TextButton")
-    GUI.RescanBtn.Size = ButtonSize
-    GUI.RescanBtn.Position = UDim2.new(0.52, -10, 0, ButtonPosY)
-    GUI.RescanBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-    GUI.RescanBtn.BorderSizePixel = 0
-    GUI.RescanBtn.Text = "🔄 RESCAN"
-    GUI.RescanBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
-    GUI.RescanBtn.TextSize = 17
-    GUI.RescanBtn.Font = Enum.Font.GothamBold
-    GUI.RescanBtn.Parent = Main
+    -- Close Button (Touch-Friendly)
+    local Close = Instance.new("TextButton")
+    Close.Size = UDim2.new(1, -20, 0, 22)
+    Close.Position = UDim2.new(0, 10, 0, 84)
+    Close.BackgroundTransparency = 1
+    Close.Text = "✕ Close"
+    Close.TextColor3 = Color3.fromRGB(180, 180, 180)
+    Close.TextSize = 12
+    Close.Font = Enum.Font.GothamBold
+    Close.Parent = Main
     
-    local RescanCorner = Instance.new("UICorner")
-    RescanCorner.CornerRadius = UDim.new(0, 12)
-    RescanCorner.Parent = GUI.RescanBtn
-    
-    -- SECOND ROW - CLEAN
-    local SecondRowY = ButtonPosY + 58
-    
-    -- STOP BUTTON (clear red)
-    GUI.StopBtn = Instance.new("TextButton")
-    GUI.StopBtn.Size = ButtonSize
-    GUI.StopBtn.Position = UDim2.new(0, 10, 0, SecondRowY)
-    GUI.StopBtn.BackgroundColor3 = Color3.fromRGB(180, 10, 10)
-    GUI.StopBtn.BorderSizePixel = 0
-    GUI.StopBtn.Text = "⏸️ STOP"
-    GUI.StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    GUI.StopBtn.TextSize = 17
-    GUI.StopBtn.Font = Enum.Font.GothamBold
-    GUI.StopBtn.Parent = Main
-    
-    local StopCorner = Instance.new("UICorner")
-    StopCorner.CornerRadius = UDim.new(0, 12)
-    StopCorner.Parent = GUI.StopBtn
-    
-    -- CLOSE BUTTON
-    GUI.CloseBtn = Instance.new("TextButton")
-    GUI.CloseBtn.Size = ButtonSize
-    GUI.CloseBtn.Position = UDim2.new(0.52, -10, 0, SecondRowY)
-    GUI.CloseBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
-    GUI.CloseBtn.BorderSizePixel = 0
-    GUI.CloseBtn.Text = "✕ CLOSE"
-    GUI.CloseBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
-    GUI.CloseBtn.TextSize = 17
-    GUI.CloseBtn.Font = Enum.Font.GothamBold
-    GUI.CloseBtn.Parent = Main
-    
-    local CloseCorner = Instance.new("UICorner")
-    CloseCorner.CornerRadius = UDim.new(0, 12)
-    CloseCorner.Parent = GUI.CloseBtn
-    
-    -- DRAGGING (still possible, but not the focus)
+    -- Dragging Support (Mouse and Touch)
     local dragging, dragInput, dragStart, startPos
-    Title.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+    
+    Main.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPos = Main.Position
+            
             input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
             end)
         end
     end)
+    
+    Main.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    
     Services.UserInputService.InputChanged:Connect(function(input)
         if input == dragInput and dragging then
             local delta = input.Position - dragStart
@@ -490,21 +424,7 @@ function GUI.Create()
         GUI.UpdateStatus()
     end)
     
-    GUI.RescanBtn.MouseButton1Click:Connect(function()
-        ScanAllRemotes()
-        ScanTriggerParts()
-        GetOtherPlayers()
-        GUI.UpdateStats()
-        GUI.UpdateStatus()
-        Log("Rescan complete!")
-    end)
-    
-    GUI.StopBtn.MouseButton1Click:Connect(function()
-        Config.Active = false
-        GUI.UpdateStatus()
-    end)
-    
-    GUI.CloseBtn.MouseButton1Click:Connect(function()
+    Close.MouseButton1Click:Connect(function()
         Config.Active = false
         ScreenGui:Destroy()
     end)
@@ -512,30 +432,20 @@ end
 
 function GUI.UpdateStats()
     if not GUI.RemoteStat then return end
-    
-    GUI.RemoteStat.Text = string.format("📡 Remotes Found: %d (%d Touch)", #Cache.AllRemoteEvents, #Cache.TouchEvents)
-    GUI.TriggerStat.Text = string.format("🎯 Trigger Parts: %d", #Cache.TriggerParts)
-    GUI.TargetStat.Text = string.format("👥 Other Players: %d (+ %d NPCs)", #Cache.OtherPlayers, #Cache.NPCs)
-    
-    local formatted = Cache.Stats.TotalFired >= 1000000 and string.format("%.1fM", Cache.Stats.TotalFired / 1000000) or
-                     Cache.Stats.TotalFired >= 1000 and string.format("%.1fK", Cache.Stats.TotalFired / 1000) or
-                     tostring(Cache.Stats.TotalFired)
-    
-    GUI.FiredStat.Text = "💥 Total Fired: " .. formatted
 end
 
 function GUI.UpdateStatus()
     if not GUI.Status or not GUI.Toggle then return end
     
     if Config.Active then
-        GUI.Status.Text = "🔥 BOMBARDING SERVER!"
+        GUI.Status.Text = "🔥 ACTIVE"
         GUI.Status.TextColor3 = Color3.fromRGB(255, 50, 50)
-        GUI.Toggle.Text = "⏸️ STOP"
+        GUI.Toggle.Text = "STOP"
         GUI.Toggle.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
     else
         GUI.Status.Text = "💤 INACTIVE"
         GUI.Status.TextColor3 = Color3.fromRGB(150, 150, 150)
-        GUI.Toggle.Text = "🔥 START BOMBARDMENT 🔥"
+        GUI.Toggle.Text = "START"
         GUI.Toggle.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
     end
 end
