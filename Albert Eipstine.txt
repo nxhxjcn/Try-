@@ -1,0 +1,649 @@
+﻿-- ULTIMATE FE SERVER BOMBARDMENT v3.0
+-- Fires remotes with OTHER PLAYERS as targets so the SERVER processes them
+-- This makes the effects visible to everyone, not just you
+
+
+local Services = {
+    Players = game:GetService("Players"),
+    Workspace = game:GetService("Workspace"),
+    CoreGui = game:GetService("CoreGui"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
+    ReplicatedFirst = game:GetService("ReplicatedFirst"),
+    StarterGui = game:GetService("StarterGui"),
+    RunService = game:GetService("RunService"),
+    JointsService = game:GetService("JointsService"),
+    UserInputService = game:GetService("UserInputService"),
+    TweenService = game:GetService("TweenService")
+}
+
+
+local LocalPlayer = Services.Players.LocalPlayer
+
+
+-- Configuration
+local Config = {
+    Active = false,
+    SpamSpeed = "EXTREME",
+    TargetAllPlayers = true,
+    TargetNPCs = true,
+    AutoRescan = true
+}
+
+
+-- Global state
+getgenv().ServerBombardment = getgenv().ServerBombardment or Config
+
+
+-- Cache
+local Cache = {
+    TouchEvents = {},
+    AllRemoteEvents = {},
+    RemoteFunctions = {},
+    TriggerParts = {},
+    OtherPlayers = {},
+    NPCs = {},
+    Stats = {
+        TotalFired = 0,
+        PlayersAffected = 0,
+        RemotesFound = 0
+    }
+}
+
+
+-- Utility
+local function Log(msg)
+    print("[SERVER BOMBARDMENT] " .. msg)
+end
+
+
+local function SafeCall(func)
+    local success, err = pcall(func)
+    if success then
+        Cache.Stats.TotalFired = Cache.Stats.TotalFired + 1
+    end
+    return success
+end
+
+
+-- CRITICAL: Scan for ALL remotes that accept player/character arguments
+local function ScanAllRemotes()
+    Log("Scanning for FE remotes...")
+    
+    Cache.TouchEvents = {}
+    Cache.AllRemoteEvents = {}
+    Cache.RemoteFunctions = {}
+    
+    local locations = {
+        Services.ReplicatedStorage,
+        Services.ReplicatedFirst,
+        Services.JointsService,
+        Services.Workspace
+    }
+    
+    for _, location in ipairs(locations) do
+        pcall(function()
+            for _, obj in ipairs(location:GetDescendants()) do
+                if obj:IsA("RemoteEvent") then
+                    table.insert(Cache.AllRemoteEvents, obj)
+                    
+                    if obj.Name == "TouchEvent" then
+                        table.insert(Cache.TouchEvents, obj)
+                    end
+                elseif obj:IsA("RemoteFunction") then
+                    table.insert(Cache.RemoteFunctions, obj)
+                end
+            end
+        end)
+    end
+    
+    Cache.Stats.RemotesFound = #Cache.AllRemoteEvents
+    
+    Log(string.format("Found %d RemoteEvents (%d TouchEvents) and %d RemoteFunctions", 
+        #Cache.AllRemoteEvents, #Cache.TouchEvents, #Cache.RemoteFunctions))
+end
+
+
+-- Scan for trigger parts (parts that cause effects when touched)
+local function ScanTriggerParts()
+    Log("Scanning for trigger parts...")
+    
+    Cache.TriggerParts = {}
+    
+    for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local name = obj.Name:lower()
+            
+            -- Parts that typically trigger server events
+            if name:find("trip") or name:find("trigger") or name:find("touch") or 
+               name:find("seat") or name:find("slide") or name:find("platform") or
+               name:find("button") or name:find("lever") or name:find("zone") or
+               name:find("teleport") or name:find("damage") or name:find("kill") or
+               obj:FindFirstChildOfClass("TouchTransmitter") then
+                table.insert(Cache.TriggerParts, obj)
+            end
+        end
+    end
+    
+    Log(string.format("Found %d trigger parts", #Cache.TriggerParts))
+end
+
+
+-- Get OTHER players (not yourself) - these are your targets
+local function GetOtherPlayers()
+    Cache.OtherPlayers = {}
+    Cache.NPCs = {}
+    
+    -- Get all OTHER players (not you)
+    for _, player in ipairs(Services.Players:GetPlayers()) do
+        if player \~= LocalPlayer and player.Character then
+            local char = player.Character
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            
+            if hrp and humanoid then
+                table.insert(Cache.OtherPlayers, {
+                    Player = player,
+                    Character = char,
+                    HRP = hrp,
+                    Humanoid = humanoid,
+                    Head = char:FindFirstChild("Head"),
+                    Torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"),
+                    Parts = {}
+                })
+                
+                -- Store all their body parts
+                for _, part in ipairs(char:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        table.insert(Cache.OtherPlayers[#Cache.OtherPlayers].Parts, part)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Get NPCs
+    local npcFolders = {
+        Services.Workspace:FindFirstChild("Customers"),
+        Services.Workspace:FindFirstChild("NPCs"),
+        Services.Workspace:FindFirstChild("Enemies")
+    }
+    
+    for _, folder in ipairs(npcFolders) do
+        if folder then
+            for _, npc in ipairs(folder:GetChildren()) do
+                local hrp = npc:FindFirstChild("HumanoidRootPart")
+                local humanoid = npc:FindFirstChildOfClass("Humanoid")
+                
+                if hrp and humanoid then
+                    table.insert(Cache.NPCs, {
+                        Character = npc,
+                        HRP = hrp,
+                        Humanoid = humanoid
+                    })
+                end
+            end
+        end
+    end
+    
+    Cache.Stats.PlayersAffected = #Cache.OtherPlayers + #Cache.NPCs
+    
+    return Cache.Stats.PlayersAffected
+end
+
+
+-- THE MAIN ATTACK: Fire remotes with OTHER PLAYERS as the targets
+local function FireRemotesOnOthers()
+    if #Cache.OtherPlayers == 0 and #Cache.NPCs == 0 then
+        return 0
+    end
+    
+    local fireCount = 0
+    
+    -- Combine all targets
+    local allTargets = {}
+    for _, p in ipairs(Cache.OtherPlayers) do table.insert(allTargets, p) end
+    for _, n in ipairs(Cache.NPCs) do table.insert(allTargets, n) end
+    
+    -- METHOD 1: Fire TouchEvents with THEIR character and trigger parts
+    -- This makes THEM sit/trip/teleport/etc
+    for _, touchEvent in ipairs(Cache.TouchEvents) do
+        for _, target in ipairs(allTargets) do
+            for _, part in ipairs(Cache.TriggerParts) do
+                SafeCall(function()
+                    -- Fire with THEIR HumanoidRootPart and the trigger part
+                    touchEvent:FireServer(target.HRP, part)
+                    fireCount = fireCount + 1
+                end)
+                
+                SafeCall(function()
+                    -- Fire with THEIR Humanoid and the trigger part
+                    touchEvent:FireServer(target.Humanoid, part)
+                    fireCount = fireCount + 1
+                end)
+                
+                SafeCall(function()
+                    -- Fire with THEIR Character and the trigger part
+                    touchEvent:FireServer(target.Character, part)
+                    fireCount = fireCount + 1
+                end)
+            end
+        end
+    end
+    
+    -- METHOD 2: Fire ALL RemoteEvents with OTHER PLAYERS as arguments
+    -- The server processes these with THEIR player object
+    for _, remote in ipairs(Cache.AllRemoteEvents) do
+        for _, target in ipairs(allTargets) do
+            -- Pattern 1: Just their character/parts
+            SafeCall(function()
+                remote:FireServer(target.HRP)
+                fireCount = fireCount + 1
+            end)
+            
+            SafeCall(function()
+                remote:FireServer(target.Character)
+                fireCount = fireCount + 1
+            end)
+            
+            SafeCall(function()
+                remote:FireServer(target.Humanoid)
+                fireCount = fireCount + 1
+            end)
+            
+            -- Pattern 2: Their parts with trigger parts
+            if target.Parts then
+                for _, bodyPart in ipairs(target.Parts) do
+                    for _, triggerPart in ipairs(Cache.TriggerParts) do
+                        SafeCall(function()
+                            remote:FireServer(bodyPart, triggerPart)
+                            fireCount = fireCount + 1
+                        end)
+                    end
+                end
+            end
+            
+            -- Pattern 3: If they have a Player object, send it
+            if target.Player then
+                SafeCall(function()
+                    remote:FireServer(target.Player)
+                    fireCount = fireCount + 1
+                end)
+                
+                SafeCall(function()
+                    remote:FireServer(target.Player, true)
+                    fireCount = fireCount + 1
+                end)
+                
+                SafeCall(function()
+                    remote:FireServer(target.Player.UserId)
+                    fireCount = fireCount + 1
+                end)
+            end
+            
+            -- Pattern 4: Combinations that might trigger game mechanics
+            SafeCall(function()
+                remote:FireServer(target.HRP, true)
+                fireCount = fireCount + 1
+            end)
+            
+            SafeCall(function()
+                remote:FireServer(target.Character, "activate")
+                fireCount = fireCount + 1
+            end)
+            
+            SafeCall(function()
+                remote:FireServer({player = target.Player or target.Character})
+                fireCount = fireCount + 1
+            end)
+        end
+    end
+    
+    -- METHOD 3: Invoke RemoteFunctions with OTHER PLAYERS
+    -- These can cause server-side lag and effects on those players
+    for _, remoteFunc in ipairs(Cache.RemoteFunctions) do
+        for _, target in ipairs(allTargets) do
+            spawn(function()
+                SafeCall(function()
+                    remoteFunc:InvokeServer(target.HRP)
+                    fireCount = fireCount + 1
+                end)
+            end)
+            
+            spawn(function()
+                SafeCall(function()
+                    remoteFunc:InvokeServer(target.Character)
+                    fireCount = fireCount + 1
+                end)
+            end)
+            
+            if target.Player then
+                spawn(function()
+                    SafeCall(function()
+                        remoteFunc:InvokeServer(target.Player)
+                        fireCount = fireCount + 1
+                    end)
+                end)
+            end
+        end
+    end
+    
+    return fireCount
+end
+
+
+-- GUI Creation - SIMPLIFIED & TOUCH SCREEN FRIENDLY ONLY
+local GUI = {}
+
+
+function GUI.Create()
+    if Services.CoreGui:FindFirstChild("ServerBombardGUI") then
+        Services.CoreGui.ServerBombardGUI:Destroy()
+    end
+    
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "ServerBombardGUI"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.Parent = Services.CoreGui
+    
+    -- MAIN FRAME - BIG & TOUCH FRIENDLY
+    local Main = Instance.new("Frame")
+    Main.Size = UDim2.new(0, 340, 0, 320)
+    Main.Position = UDim2.new(0.5, -170, 0.5, -160)
+    Main.BackgroundColor3 = Color3.fromRGB(20, 20, 35)
+    Main.BorderSizePixel = 0
+    Main.Parent = ScreenGui
+    
+    local MainCorner = Instance.new("UICorner")
+    MainCorner.CornerRadius = UDim.new(0, 20)
+    MainCorner.Parent = Main
+    
+    local MainStroke = Instance.new("UIStroke")
+    MainStroke.Color = Color3.fromRGB(255, 40, 40)
+    MainStroke.Thickness = 4
+    MainStroke.Parent = Main
+    
+    -- PULSE EFFECT (keeps it eye-catching)
+    spawn(function()
+        while Main.Parent do
+            Services.TweenService:Create(MainStroke, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency = 0.4}):Play()
+            wait(0.8)
+            Services.TweenService:Create(MainStroke, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency = 0}):Play()
+            wait(0.8)
+        end
+    end)
+    
+    -- TITLE BAR
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDM2.new(1, 0, 0, 50)
+    Title.BackgroundColor3 = Color3.fromRGB(255, 20, 20)
+    Title.BorderSizePixel = 0
+    Title.Text = "FE SERVER BOMBARDMENT"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.TextSize = 19
+    Title.Font = Enum.Font.GothamBold
+    Title.Parent = Main
+    
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 20)
+    TitleCorner.Parent = Title
+    
+    -- WARNING BAR
+    local Warning = Instance.new("TextLabel")
+    Warning.Size = UDim2.new(1, -20, 0, 30)
+    Warning.Position = UDim2.new(0, 10, 0, 55)
+    Warning.BackgroundColor3 = Color3.fromRGB(70, 15, 15)
+    Warning.BorderSizePixel = 0
+    Warning.Text = "⚡ Affects ALL other players (visible to everyone) ⚡"
+    Warning.TextColor3 = Color3.fromRGB(255, 190, 70)
+    Warning.TextSize = 13
+    Warning.Font = Enum.Font.GothamBold
+    Warning.TextWrapped = true
+    Warning.Parent = Main
+    
+    local WarnCorner = Instance.new("UICorner")
+    WarnCorner.CornerRadius = UDim.new(0, 10)
+    WarnCorner.Parent = Warning
+    
+    -- STATUS BAR
+    GUI.Status = Instance.new("TextLabel")
+    GUI.Status.Size = UDim2.new(1, -20, 0, 35)
+    GUI.Status.Position = UDim2.new(0, 10, 0, 92)
+    GUI.Status.BackgroundTransparency = 1
+    GUI.Status.Text = "💤 INACTIVE"
+    GUI.Status.TextColor3 = Color3.fromRGB(150, 150, 150)
+    GUI.Status.TextSize = 18
+    GUI.Status.Font = Enum.Font.GothamBold
+    GUI.Status.Parent = Main
+    
+    -- ACTION BUTTONS - BIG & TOUCH FRIENDLY
+    local ButtonSize = UDim2.new(0.48, 0, 0, 48)
+    local ButtonPosY = 135
+    local ButtonGap = 10
+    
+    -- START / STOP BUTTON
+    GUI.Toggle = Instance.new("TextButton")
+    GUI.Toggle.Size = ButtonSize
+    GUI.Toggle.Position = UDim2.new(0, 10, 0, ButtonPosY)
+    GUI.Toggle.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
+    GUI.Toggle.BorderSizePixel = 0
+    GUI.Toggle.Text = "🔥 START BOMBARDMENT 🔥"
+    GUI.Toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    GUI.Toggle.TextSize = 17
+    GUI.Toggle.Font = Enum.Font.GothamBold
+    GUI.Toggle.Parent = Main
+    
+    local ToggleCorner = Instance.new("UICorner")
+    ToggleCorner.CornerRadius = UDim.new(0, 12)
+    ToggleCorner.Parent = GUI.Toggle
+    
+    -- RESCAN BUTTON
+    GUI.RescanBtn = Instance.new("TextButton")
+    GUI.RescanBtn.Size = ButtonSize
+    GUI.RescanBtn.Position = UDim2.new(0.52, -10, 0, ButtonPosY)
+    GUI.RescanBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+    GUI.RescanBtn.BorderSizePixel = 0
+    GUI.RescanBtn.Text = "🔄 RESCAN"
+    GUI.RescanBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
+    GUI.RescanBtn.TextSize = 17
+    GUI.RescanBtn.Font = Enum.Font.GothamBold
+    GUI.RescanBtn.Parent = Main
+    
+    local RescanCorner = Instance.new("UICorner")
+    RescanCorner.CornerRadius = UDim.new(0, 12)
+    RescanCorner.Parent = GUI.RescanBtn
+    
+    -- SECOND ROW - CLEAN
+    local SecondRowY = ButtonPosY + 58
+    
+    -- STOP BUTTON (clear red)
+    GUI.StopBtn = Instance.new("TextButton")
+    GUI.StopBtn.Size = ButtonSize
+    GUI.StopBtn.Position = UDim2.new(0, 10, 0, SecondRowY)
+    GUI.StopBtn.BackgroundColor3 = Color3.fromRGB(180, 10, 10)
+    GUI.StopBtn.BorderSizePixel = 0
+    GUI.StopBtn.Text = "⏸️ STOP"
+    GUI.StopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    GUI.StopBtn.TextSize = 17
+    GUI.StopBtn.Font = Enum.Font.GothamBold
+    GUI.StopBtn.Parent = Main
+    
+    local StopCorner = Instance.new("UICorner")
+    StopCorner.CornerRadius = UDim.new(0, 12)
+    StopCorner.Parent = GUI.StopBtn
+    
+    -- CLOSE BUTTON
+    GUI.CloseBtn = Instance.new("TextButton")
+    GUI.CloseBtn.Size = ButtonSize
+    GUI.CloseBtn.Position = UDim2.new(0.52, -10, 0, SecondRowY)
+    GUI.CloseBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    GUI.CloseBtn.BorderSizePixel = 0
+    GUI.CloseBtn.Text = "✕ CLOSE"
+    GUI.CloseBtn.TextColor3 = Color3.fromRGB(200, 200, 255)
+    GUI.CloseBtn.TextSize = 17
+    GUI.CloseBtn.Font = Enum.Font.GothamBold
+    GUI.CloseBtn.Parent = Main
+    
+    local CloseCorner = Instance.new("UICorner")
+    CloseCorner.CornerRadius = UDim.new(0, 12)
+    CloseCorner.Parent = GUI.CloseBtn
+    
+    -- DRAGGING (still possible, but not the focus)
+    local dragging, dragInput, dragStart, startPos
+    Title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    Services.UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    -- Button Actions
+    GUI.Toggle.MouseButton1Click:Connect(function()
+        Config.Active = not Config.Active
+        getgenv().ServerBombardment.Active = Config.Active
+        GUI.UpdateStatus()
+    end)
+    
+    GUI.RescanBtn.MouseButton1Click:Connect(function()
+        ScanAllRemotes()
+        ScanTriggerParts()
+        GetOtherPlayers()
+        GUI.UpdateStats()
+        GUI.UpdateStatus()
+        Log("Rescan complete!")
+    end)
+    
+    GUI.StopBtn.MouseButton1Click:Connect(function()
+        Config.Active = false
+        GUI.UpdateStatus()
+    end)
+    
+    GUI.CloseBtn.MouseButton1Click:Connect(function()
+        Config.Active = false
+        ScreenGui:Destroy()
+    end)
+end
+
+
+function GUI.UpdateStats()
+    if not GUI.RemoteStat then return end
+    
+    GUI.RemoteStat.Text = string.format("📡 Remotes Found: %d (%d Touch)", #Cache.AllRemoteEvents, #Cache.TouchEvents)
+    GUI.TriggerStat.Text = string.format("🎯 Trigger Parts: %d", #Cache.TriggerParts)
+    GUI.TargetStat.Text = string.format("👥 Other Players: %d (+ %d NPCs)", #Cache.OtherPlayers, #Cache.NPCs)
+    
+    local formatted = Cache.Stats.TotalFired >= 1000000 and string.format("%.1fM", Cache.Stats.TotalFired / 1000000) or
+                     Cache.Stats.TotalFired >= 1000 and string.format("%.1fK", Cache.Stats.TotalFired / 1000) or
+                     tostring(Cache.Stats.TotalFired)
+    
+    GUI.FiredStat.Text = "💥 Total Fired: " .. formatted
+end
+
+
+function GUI.UpdateStatus()
+    if not GUI.Status or not GUI.Toggle then return end
+    
+    if Config.Active then
+        GUI.Status.Text = "🔥 BOMBARDING SERVER!"
+        GUI.Status.TextColor3 = Color3.fromRGB(255, 50, 50)
+        GUI.Toggle.Text = "⏸️ STOP"
+        GUI.Toggle.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+    else
+        GUI.Status.Text = "💤 INACTIVE"
+        GUI.Status.TextColor3 = Color3.fromRGB(150, 150, 150)
+        GUI.Toggle.Text = "🔥 START BOMBARDMENT 🔥"
+        GUI.Toggle.BackgroundColor3 = Color3.fromRGB(220, 20, 60)
+    end
+end
+
+
+-- Main Loop
+spawn(function()
+    while true do
+        Services.RunService.Heartbeat:Wait()
+        
+        if Config.Active then
+            GetOtherPlayers()
+            FireRemotesOnOthers()
+        end
+    end
+end)
+
+
+-- Stats Loop
+spawn(function()
+    while true do
+        wait(0.5)
+        if GUI.RemoteStat then
+            GUI.UpdateStats()
+        end
+    end
+end)
+
+
+-- Auto Rescan Loop
+spawn(function()
+    while true do
+        wait(10)
+        if Config.AutoRescan then
+            ScanAllRemotes()
+            ScanTriggerParts()
+        end
+    end
+end)
+
+
+-- Initialize
+Log("Initializing FE Server Bombardment v3.0...")
+ScanAllRemotes()
+ScanTriggerParts()
+GetOtherPlayers()
+GUI.Create()
+GUI.UpdateStats()
+GUI.UpdateStatus()
+
+
+Services.StarterGui:SetCore("SendNotification", {
+    Title = "✓ Server Bombardment Loaded";
+    Text = string.format("%d remotes | %d players | Ready!", #Cache.AllRemoteEvents, #Cache.OtherPlayers);
+    Duration = 4;
+})
+
+
+Log("Ready! This will affect OTHER PLAYERS, not you!")
+Log(string.format("Found: %d remotes, %d triggers, %d other players", 
+    #Cache.AllRemoteEvents, #Cache.TriggerParts, #Cache.OtherPlayers))
+
+
+-- Console Commands
+getgenv().ServerBombardment.Start = function()
+    Config.Active = true
+    GUI.UpdateStatus()
+end
+
+
+getgenv().ServerBombardment.Stop = function()
+    Config.Active = false
+    GUI.UpdateStatus()
+end
+
+
+getgenv().ServerBombardment.Rescan = function()
+    ScanAllRemotes()
+    ScanTriggerParts()
+    GetOtherPlayers()
+    GUI.UpdateStats()
+    Log("Rescan complete!")
+end
+
+
+getgenv().ServerBombardment.Stats = Cache.Stats
